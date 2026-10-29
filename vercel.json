@@ -5,8 +5,5 @@
       "maxDuration": 60,
       "includeFiles": "{*.html,*.js,*.json,*.png}"
     }
-  },
-  "rewrites": [
-    { "source": "/(.*)", "destination": "/app" }
-  ]
+  }
 }
