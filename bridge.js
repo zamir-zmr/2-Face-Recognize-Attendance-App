@@ -66,7 +66,7 @@
   let pingFails = 0;
   async function ping() {
     try {
-      const h = await api('/api/health', {}, 6000);
+      const h = await api('/api/health', {}, 25000);   /* Vercel cold start: model download + load */
       pingFails = 0;
       backend.ok = !!h.ok;
       const el = statusEl();
@@ -78,7 +78,7 @@
       } else { noticeKey = ""; closeFingerNotice(); }
       /* server lost its embeddings (restart / ephemeral disk) or never had them -> rebuild from stored photos */
       if (backend.ok && h.enrolled < employees.filter(e => e.photo && !syncFailed.has(e.id)).length) syncMissing();
-    } catch (e) { if (++pingFails >= 2) backend.ok = false; }   /* one slow ping must not flip the scanner offline */
+    } catch (e) { if (++pingFails >= 3) backend.ok = false; }   /* one slow ping must not flip the scanner offline */
   }
 
   /* Legacy face-api descriptors are not portable to the server's SFace model, so re-derive from the saved photos. */

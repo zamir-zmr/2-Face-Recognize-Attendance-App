@@ -1103,7 +1103,7 @@ html:not(.ash-locked):not(.ash-lock-fade) #appLock{display:none}
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-storage-compat.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
-<script>window.FACE_BACKEND_URL = location.hostname.endsWith("onrender.com") ? location.origin : "https://face-backend.onrender.com"; window.FACE_API_KEY = "";  /* HTTPS only: camera + WebAuthn need a secure context */</script>
+<script>window.FACE_BACKEND_URL = /(onrender\.com|vercel\.app)$/.test(location.hostname) ? location.origin : "https://face-backend.onrender.com"; window.FACE_API_KEY = "";  /* HTTPS only: camera + WebAuthn need a secure context */</script>
 <script src="i18n.js"></script>
 
 </body>
