@@ -16,6 +16,10 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
+if os.getenv("VERCEL"):                       # Vercel FS is read-only except /tmp
+    os.environ.setdefault("FACE_MODEL_DIR", "/tmp/models")
+    os.environ.setdefault("FACE_DATA_DIR", "/tmp/data")
+
 import download_models
 import sessions
 from engine import engine, prepare
@@ -33,8 +37,11 @@ async def lifespan(_: FastAPI):
     try:
         engine.load()
     except RuntimeError:          # models missing -> fetch once, then retry
-        download_models.main()
-        engine.load()
+        try:
+            download_models.main()
+            engine.load()
+        except Exception as e:  # noqa: BLE001  never crash startup
+            print("[startup] model load failed:", e)
     yield
 
 

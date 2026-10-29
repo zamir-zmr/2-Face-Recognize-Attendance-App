@@ -1,4 +1,5 @@
 """Downloads compressed (int8-quantized) OpenCV Zoo models: YuNet (detector, ~0.1 MB) + SFace (recognizer, ~9.7 MB)."""
+import os
 import subprocess
 import sys
 import urllib.request
@@ -60,6 +61,9 @@ def ensure_mediapipe() -> None:
     if installed() == MEDIAPIPE_VERSION:
         print("ok   %s already installed" % MEDIAPIPE)
         return
+    if os.getenv("VERCEL"):
+        print("INFO: Vercel read-only runtime -> skipping mediapipe install, finger challenge disabled.")
+        return
     if sys.version_info >= (3, 13):
         print("WARNING: Python %s is unsupported by %s (needs 3.9-3.12) -> skipping, finger challenge disabled. "
               "Set .python-version to 3.12." % (sys.version.split()[0], MEDIAPIPE))
@@ -75,8 +79,8 @@ def ensure_mediapipe() -> None:
 
 def main() -> int:
     ensure_mediapipe()
-    out = Path(__file__).parent / "models"
-    out.mkdir(exist_ok=True)
+    out = Path(os.getenv("FACE_MODEL_DIR") or Path(__file__).parent / "models")
+    out.mkdir(parents=True, exist_ok=True)
     ok = True
     for (n, u), (fn, fu) in zip(FILES.items(), FALLBACK.items()):
         if not fetch(n, u, out):
