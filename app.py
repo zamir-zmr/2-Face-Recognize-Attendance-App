@@ -21,6 +21,8 @@ if os.getenv("VERCEL"):                       # Vercel FS is read-only except /t
     os.environ.setdefault("FACE_DATA_DIR", "/tmp/data")
 
 import download_models
+if os.getenv("VERCEL"):
+    download_models.vercel_mediapipe()        # must run BEFORE engine imports mediapipe
 import sessions
 from engine import engine, prepare
 from store import fb, store

@@ -1,8 +1,10 @@
 """Downloads compressed (int8-quantized) OpenCV Zoo models: YuNet (detector, ~0.1 MB) + SFace (recognizer, ~9.7 MB)."""
+import json
 import os
 import subprocess
 import sys
 import urllib.request
+import zipfile
 from pathlib import Path
 
 BASE = "https://github.com/opencv/opencv_zoo/raw/main/models"
@@ -49,6 +51,35 @@ def _pip(*args) -> bool:
     return r.returncode == 0
 
 
+def vercel_mediapipe() -> bool:
+    """Vercel: site-packages is read-only and has no pip -> fetch the mediapipe wheel from PyPI (stdlib only),
+    unpack into /tmp and put it on sys.path. Its small deps (absl-py, attrs, flatbuffers, protobuf, matplotlib)
+    come from requirements.txt."""
+    target = Path("/tmp/mp_site")
+    try:
+        if not (target / "mediapipe").is_dir():
+            tag = "cp%d%d" % sys.version_info[:2]
+            with urllib.request.urlopen("https://pypi.org/pypi/mediapipe/%s/json" % MEDIAPIPE_VERSION, timeout=30) as r:
+                files = json.load(r)["urls"]
+            hit = [f for f in files if f["filename"].endswith(".whl") and tag in f["filename"]
+                   and "manylinux" in f["filename"] and "x86_64" in f["filename"]]
+            if not hit:
+                print("WARNING: no mediapipe wheel for", tag)
+                return False
+            whl = Path("/tmp/mediapipe.whl")
+            urllib.request.urlretrieve(hit[0]["url"], whl)
+            with zipfile.ZipFile(whl) as z:
+                z.extractall(target)
+            whl.unlink(missing_ok=True)
+            print("ok   %s unpacked to %s" % (MEDIAPIPE, target))
+        if str(target) not in sys.path:
+            sys.path.insert(0, str(target))
+        return True
+    except Exception as e:  # noqa: BLE001
+        print("WARNING: mediapipe setup failed on Vercel:", e)
+        return False
+
+
 def ensure_mediapipe() -> None:
     """Build-time self-heal: install the pinned mediapipe with --no-deps (its opencv-contrib-python pin needs libGL)."""
     probe = "import importlib.metadata as m, mediapipe; print(m.version('mediapipe'))"
@@ -62,7 +93,7 @@ def ensure_mediapipe() -> None:
         print("ok   %s already installed" % MEDIAPIPE)
         return
     if os.getenv("VERCEL"):
-        print("INFO: Vercel read-only runtime -> skipping mediapipe install, finger challenge disabled.")
+        vercel_mediapipe()
         return
     if sys.version_info >= (3, 13):
         print("WARNING: Python %s is unsupported by %s (needs 3.9-3.12) -> skipping, finger challenge disabled. "
