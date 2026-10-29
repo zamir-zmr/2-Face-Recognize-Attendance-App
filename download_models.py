@@ -62,7 +62,7 @@ def ensure_mediapipe() -> None:
         return
     if sys.version_info >= (3, 13):
         print("WARNING: Python %s is unsupported by %s (needs 3.9-3.12) -> skipping, finger challenge disabled. "
-              "Set PYTHON_VERSION=3.12.3 / .python-version." % (sys.version.split()[0], MEDIAPIPE))
+              "Set .python-version to 3.12." % (sys.version.split()[0], MEDIAPIPE))
         return
     _pip(*MP_DEPS)
     _pip("--no-deps", MEDIAPIPE)
@@ -70,7 +70,7 @@ def ensure_mediapipe() -> None:
         print("ok   %s installed" % MEDIAPIPE)
     else:
         print("WARNING: %s not installed -> finger challenge disabled. mediapipe 0.10.21 needs Python 3.9-3.12: "
-              "add a .python-version file (3.12.3) to the repo root." % MEDIAPIPE)
+              "add a .python-version file (3.12) to the repo root." % MEDIAPIPE)
 
 
 def main() -> int:
