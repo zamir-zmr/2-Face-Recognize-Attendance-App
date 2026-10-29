@@ -1,0 +1,15 @@
+opencv-contrib-python-headless>=4.9,<4.12
+numpy>=1.24,<2
+fastapi>=0.110
+uvicorn[standard]>=0.29
+pydantic>=2.5
+redis>=5.0
+psycopg2-binary>=2.9
+# mediapipe deps (mediapipe==0.10.21 itself is installed by download_models.py with --no-deps)
+absl-py
+attrs>=19.1.0
+flatbuffers>=2.0
+protobuf>=4.25.3,<5
+matplotlib
+google-auth>=2.29
+requests>=2.31

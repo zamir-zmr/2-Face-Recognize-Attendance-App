@@ -1,0 +1,216 @@
+<script>window.FACE_BACKEND_URL = "https://face-backend.onrender.com"; window.FACE_API_KEY = "";  /* HTTPS only: camera + WebAuthn need a secure context */</script>
+<!-- PASTE just before </body> (after the main </script>). Set backend URL via window.FACE_BACKEND_URL / localStorage 'face_backend_url'. -->
+<script>
+/* ===== PYTHON/OPENCV BACKEND BRIDGE (falls back to built-in face-api.js when backend is unreachable) ===== */
+(() => {
+  'use strict';
+  const CFG = {
+    url: (window.FACE_BACKEND_URL || localStorage.getItem('face_backend_url') || 'http://localhost:8000').replace(/\/$/, ''),
+    key: window.FACE_API_KEY || localStorage.getItem('face_api_key') || '',
+    width: 480, quality: 0.6, gapMs: 80,
+    pruneSync: window.FACE_PRUNE_SYNC === true          /* opt-in: delete server embeddings for employees removed locally */
+  };
+  const backend = { ok: false };
+
+  async function api(path, opts = {}, timeout = 4000) {
+    const ctl = new AbortController();
+    const t = setTimeout(() => ctl.abort(), timeout);
+    try {
+      const r = await fetch(CFG.url + path, {
+        method: opts.method || 'GET',
+        headers: { 'Content-Type': 'application/json', ...(CFG.key ? { 'X-API-Key': CFG.key } : {}) },
+        body: opts.body, signal: ctl.signal
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.detail || ('HTTP ' + r.status));
+      return j;
+    } finally { clearTimeout(t); }
+  }
+
+  async function ping() {
+    try {
+      const h = await api('/api/health', {}, 2500);
+      backend.ok = !!h.ok;
+      const el = document.getElementById('modelStatus');
+      if (backend.ok && el) { el.textContent = 'Python Face Engine ✓'; el.style.color = 'var(--ok)'; }
+    } catch (e) { backend.ok = false; }
+  }
+  window.faceBackendDelete = id => backend.ok ? api('/api/enroll/' + encodeURIComponent(id), { method: 'DELETE' }).catch(() => {}) : null;
+  window.faceBackendImport = recs => backend.ok ? api('/api/employees/import', { method: 'POST', body: JSON.stringify({ employees: recs }) }, 90000).catch(() => null) : null;   /* used by index.html when an employee is deleted */
+  ping(); setInterval(ping, 20000);
+
+  const cap = document.createElement('canvas'), cctx = cap.getContext('2d');
+  function grab(src, w = CFG.width, q = CFG.quality) {
+    const sw = src.videoWidth || src.naturalWidth || src.width, sh = src.videoHeight || src.naturalHeight || src.height;
+    const s = Math.min(1, w / sw);
+    cap.width = Math.round(sw * s); cap.height = Math.round(sh * s);
+    cctx.drawImage(src, 0, 0, cap.width, cap.height);
+    return cap.toDataURL('image/jpeg', q);
+  }
+
+  /* ---------- FINGER CHALLENGE UI (self-contained: light card + animated tick per matched finger) ---------- */
+  const st = document.createElement('style');
+  st.textContent = `
+  #fingerChallenge{position:fixed;left:50%;top:14%;transform:translate(-50%,-12px);z-index:9999;min-width:230px;padding:14px 20px 16px;
+    background:#fff;border-radius:18px;box-shadow:0 10px 30px rgba(37,99,235,.18);text-align:center;font-family:inherit;opacity:0;
+    pointer-events:none;transition:opacity .25s,transform .25s}
+  #fingerChallenge.show{opacity:1;transform:translate(-50%,0)}
+  #fingerChallenge .fc-title{font-size:13px;font-weight:600;color:#2563eb;letter-spacing:.04em;text-transform:uppercase}
+  #fingerChallenge .fc-num{font-size:52px;font-weight:800;line-height:1.1;color:#0f172a}
+  #fingerChallenge .fc-ticks{display:flex;gap:8px;justify-content:center;margin-top:8px}
+  #fingerChallenge .fc-slot{width:34px;height:34px;border-radius:50%;background:#eff6ff;border:2px solid #bfdbfe;display:flex;
+    align-items:center;justify-content:center;transition:background .25s,border-color .25s,transform .25s}
+  #fingerChallenge .fc-slot svg{width:20px;height:20px}
+  #fingerChallenge .fc-slot path{fill:none;stroke:#fff;stroke-width:3.5;stroke-linecap:round;stroke-linejoin:round;
+    stroke-dasharray:24;stroke-dashoffset:24;transition:stroke-dashoffset .35s ease .1s}
+  #fingerChallenge .fc-slot.on{background:#2563eb;border-color:#2563eb;transform:scale(1.12)}
+  #fingerChallenge .fc-slot.on path{stroke-dashoffset:0}`;
+  document.head.appendChild(st);
+  const fc = document.createElement('div');
+  fc.id = 'fingerChallenge';
+  fc.innerHTML = '<div class="fc-title"></div><div class="fc-num"></div><div class="fc-ticks"></div>';
+  document.body.appendChild(fc);
+  let fcN = 0;
+  function showFinger(n, ticks) {
+    if (fcN !== n) {
+      fcN = n;
+      fc.querySelector('.fc-title').textContent = 'Show ' + (n === 1 ? '1 finger' : n + ' fingers');
+      fc.querySelector('.fc-num').textContent = n;
+      fc.querySelector('.fc-ticks').innerHTML = Array.from({ length: n }, () =>
+        '<div class="fc-slot"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></div>').join('');
+    }
+    fc.querySelectorAll('.fc-slot').forEach((el, i) => setTimeout(() => el.classList.toggle('on', i < ticks), i * 90));
+    fc.classList.add('show');
+  }
+  function hideFinger() { fc.classList.remove('show'); fcN = 0; }
+
+  /* ---------- LIVE SCAN (server: low-light enhance -> detect -> identify -> random pose challenge) ---------- */
+  const _origRunFaceScan = window.runFaceScan;
+
+  window.runFaceScan = async function () {
+    if (!backend.ok) return _origRunFaceScan();
+    isProcessingFrame = true;
+    const video = document.getElementById('video');
+    const overlay = document.getElementById('overlay');
+    const guide = document.getElementById('camGuide');
+    if (!video.videoWidth) { isProcessingFrame = false; return; }
+    if (!employees.some(e => e.descriptor)) { setScanStatus('No face records enrolled', 'fail'); isProcessingFrame = false; return; }
+
+    if (overlay.width !== video.videoWidth) overlay.width = video.videoWidth;
+    if (overlay.height !== video.videoHeight) overlay.height = video.videoHeight;
+    const ctx = overlay.getContext('2d');
+    const draw = (box, color, lw = 2) => {
+      ctx.clearRect(0, 0, overlay.width, overlay.height);
+      if (!box) return;
+      ctx.strokeStyle = color; ctx.lineWidth = lw;
+      ctx.strokeRect(box[0] * overlay.width, box[1] * overlay.height, box[2] * overlay.width, box[3] * overlay.height);
+    };
+
+    let sid, res = null, bannerFor = null, tickShown = false;
+    try { sid = (await api('/api/verify/start', { method: 'POST', body: '{}' })).session_id; }
+    catch (e) { backend.ok = false; isProcessingFrame = false; return; }
+
+    try {
+      while (scanStream) {
+        updateFlashlightState(video);
+        res = await api('/api/verify/frame', { method: 'POST', body: JSON.stringify({ session_id: sid, image: grab(video) }) }, 5000);
+        if (res.stage !== 'search') isVerifyingLiveness = true;
+        guide.classList.toggle('active', !!res.box);
+        draw(res.box, '#38bdf8');
+        if (res.hand) {                                       /* amber hand box */
+          ctx.strokeStyle = '#f59e0b'; ctx.lineWidth = 2;
+          ctx.strokeRect(res.hand[0] * overlay.width, res.hand[1] * overlay.height, res.hand[2] * overlay.width, res.hand[3] * overlay.height);
+        }
+        const fin = (res.completed || []).find(c => c.kind === 'fingers');
+        if (fin && !tickShown) {                              /* finger step done: one tick per finger, then continue */
+          tickShown = true; showFinger(fin.value, fin.value);
+          await sleep(fin.value * 90 + 700);
+          if (res.state === 'running') hideFinger();
+        }
+
+        if (res.state === 'running') {
+          if (res.stage === 'challenge' && res.kind === 'fingers') {
+            if (bannerFor) { hidePoseBanner(); bannerFor = null; }
+            showFinger(res.fingers, res.ticks);
+            setScanStatus(res.message, 'detecting');
+          } else if (res.stage === 'challenge' && res.pose) {
+            hideFinger();
+            if (bannerFor !== res.pose) { showPoseBanner(res.pose, false); bannerFor = res.pose; }
+            setScanStatus('Pose Challenge: ' + res.pose, 'detecting');
+          } else {
+            setScanStatus(res.message, 'detecting');
+          }
+          await sleep(CFG.gapMs);
+          continue;
+        }
+        break;
+      }
+    } catch (e) {
+      backend.ok = false;                                   /* next scan falls back to face-api */
+      res = null;
+    }
+
+    isVerifyingLiveness = false;
+    if (!scanStream || !res) { hidePoseBanner(); hideFinger(); isProcessingFrame = false; return; }
+    if (res.state !== 'passed') hideFinger();
+    else setTimeout(hideFinger, 900);
+
+    if (res.state === 'idle') {
+      guide.classList.remove('active'); draw(null);
+      scanGapMs = 220; setScanStatus('Scanning face...', 'detecting');
+    } else if (res.state === 'unknown') {
+      draw(res.box, '#f43f5e', 3);
+      setScanStatus(res.message, 'fail'); scanGapMs = 450;
+    } else if (res.state === 'passed') {
+      hidePoseBanner(); draw(res.box, '#10b981', 3);
+      const emp = employees.find(e => e.id === res.employee_id);
+      if (emp) { setScanStatus('Verified: ' + emp.name, 'success'); logAttendance(emp, 'Face Recognition'); }
+      else { setScanStatus('Employee record missing on this device', 'fail'); toast('Employee ' + res.employee_id + ' not found locally', 'err'); }
+    } else {
+      draw(res.box, '#f43f5e', 3);
+      setScanStatus(res.message, 'fail'); toast(res.message, 'err');
+      if (res.pose) showPoseBanner(res.pose, true);
+      await sleep(1500); hidePoseBanner();
+    }
+    isProcessingFrame = false;
+  };
+
+  /* ---------- ENROLLMENT (embedding computed & stored on server) ---------- */
+  document.getElementById('captureFaceBtn').addEventListener('click', async (e) => {
+    if (!backend.ok) return;                                /* let the original face-api handler run */
+    e.stopImmediatePropagation();
+    const statusEl = document.getElementById('regFaceStatus');
+    const id = document.getElementById('fEmpId').value.trim();
+    if (!id) { statusEl.textContent = 'Enter Employee ID first'; statusEl.className = 'enroll-status err'; return; }
+    const video = document.getElementById('regVideo'), preview = document.getElementById('galleryPreview');
+    const fromGallery = currentEnrollSource === 'gallery';
+    statusEl.textContent = 'Enrolling on server…'; statusEl.className = 'enroll-status';
+    window.__enrolling = true;
+    try {
+      const images = [];
+      if (fromGallery) images.push(grab(preview, 640, 0.85));
+      else for (let i = 0; i < 4; i++) { images.push(grab(video, 640, 0.85)); await sleep(150); }
+      const r = await api('/api/enroll', { method: 'POST', body: JSON.stringify({ employee_id: id, images }) }, 90000);
+      capturedDescriptor = new Array(128).fill(0);          /* placeholder flag; the real embedding lives on the server */
+      capturedPhoto = fromGallery ? preview.src : snapshotToDataUrl(video);
+      statusEl.textContent = 'Face captured ✓ (' + r.samples + ' sample' + (r.samples > 1 ? 's' : '') + ')';
+      statusEl.className = 'enroll-status ok';
+      updateEnrollBadges();
+    } catch (err) {
+      statusEl.textContent = err.name === 'AbortError' ? 'Server slow - please tap Capture again' : err.message;
+      statusEl.className = 'enroll-status err';
+    } finally { window.__enrolling = false; }
+  }, true);
+
+  /* ---------- optional: keep server embeddings in sync with local employee list ---------- */
+  if (CFG.pruneSync) {
+    const _re = window.renderEmployees; let tm = null;
+    window.renderEmployees = function () {
+      const r = _re.apply(this, arguments);
+      clearTimeout(tm);
+      tm = setTimeout(() => { if (backend.ok && employees.length) api('/api/prune', { method: 'POST', body: JSON.stringify({ keep: employees.map(e => e.id) }) }).catch(() => {}); }, 1500);
+      return r;
+    };
+  }
+})();
+</script>
