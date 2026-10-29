@@ -60,6 +60,10 @@ def ensure_mediapipe() -> None:
     if installed() == MEDIAPIPE_VERSION:
         print("ok   %s already installed" % MEDIAPIPE)
         return
+    if sys.version_info >= (3, 13):
+        print("WARNING: Python %s is unsupported by %s (needs 3.9-3.12) -> skipping, finger challenge disabled. "
+              "Set PYTHON_VERSION=3.12.3 / .python-version." % (sys.version.split()[0], MEDIAPIPE))
+        return
     _pip(*MP_DEPS)
     _pip("--no-deps", MEDIAPIPE)
     if installed() == MEDIAPIPE_VERSION:
